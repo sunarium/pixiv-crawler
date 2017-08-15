@@ -22,7 +22,7 @@ data = {
 }
 #ar = requests.post(url, headers=headers, data=data).json()
 ar = requests.post(url, headers=headers, data=data)
-'''
+
 access_token = ar['response']['access_token']
 refresh_token = ar['response']['refresh_token']
 user_id = ar['response']['user']['id']
@@ -31,10 +31,10 @@ search_url = 'https://public-api.secure.pixiv.net/v1/search/works.json'
 search_params = {
     'q': 'めぐみん',
     'page': 1,
-    'per_page': 50,
+    'per_page': 50, 
     'period': 'all',
     'order': 'desc',
-    'sort': 'popular',
+    'sort': 'date',
     'mode': 'text',
     'types': 'illustration',
     'image_sizes': 'large',
@@ -69,4 +69,3 @@ with open(down_path, 'wb') as img_file:
     img_file.close()
 
 print('Success')
-'''
