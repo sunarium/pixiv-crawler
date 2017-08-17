@@ -131,7 +131,7 @@ class PixivBot(object):
             self.search_params['sort'] = 'popular'
         self.header['Authorization'] = 'Bearer %s' % self.access_token
         print('Token used:', self.access_token)
-        for page in range(1, pages):  # grab at most 5000
+        for page in range(1, pages+1):  # grab at most 5000
             self.search_params['page'] = page
             r = self.session.get(self.search_url, headers=self.header, params=self.search_params)
             if r.status_code != 200:
@@ -158,23 +158,25 @@ class PixivBot(object):
             print(self.manga_id_list)
             print(self.image_url_list)
 
-    def save_image_from_url(self, url, file):
+    def save_image_from_url(self, url):
+        file = os.path.basename(url)
         if not os.path.exists(file):
             with open(file, 'wb+') as f:
                 stream = self.session.get(url, headers=self.download_header, stream=True)
                 f.write(stream.content)
-                f.close()
 
     def save_images(self, debug=False):
         # todo
-        # separate image in folders based on ranking
-        # or just buy a fucking premium.
-        for u in self.image_url_list:
+        # - Added a counter
+        # - Add random delay
+        total = len(self.image_url_list)
+        for i, u in enumerate(self.image_url_list):
             try:
-                filename = os.path.basename(u)
-                self.save_image_from_url(u, filename)
+                print('Saving {:4d} of {:4d}...'.format(i, total), end='\n')
+                self.save_image_from_url(u)
                 if debug:
-                    print('Successfully saved %s' % filename)
+                    print('Successfully saved %s' % u)
+                time.sleep(2)
             except Exception as e:
                 print('Error in saving %s' % u)
                 print(e)
@@ -190,7 +192,8 @@ class PixivBot(object):
             j = self.json_to_object(r.text)
             for img in j.response[0].metadata.pages:
                 filename = os.path.join(os.path.dirname(__file__), 'manga', os.path.basename(img.image_urls.medium))
-                self.save_image_from_url(img.image_urls.medium, filename)
+                self.save_image_from_url(img.image_urls.medium)
+            time.sleep(2)
         self.manga_id_list = []
 
     def test_run(self):
@@ -207,4 +210,4 @@ class PixivBot(object):
 
 if __name__ == '__main__':
     p = PixivBot(username='yu_mingqian@sina.com', password='password')
-    p.run(pages=10, log_search=False, save=True)
+    p.run(pages=1, log_search=True, save=True)
