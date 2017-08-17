@@ -7,6 +7,7 @@ import json
 import io
 from collections import namedtuple
 
+
 class PixivBot(object):
     # constants
     default_download_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pixiv_crawl')
@@ -31,7 +32,7 @@ class PixivBot(object):
         'period': 'all',
         'order': 'desc',
         'sort': 'date',  # 'popular' for premium accounts.
-        'mode': 'text',
+        'mode': 'tag',
         'types': 'illustration,manga',
         'image_sizes': 'large',
         'include_stats': True,
@@ -64,11 +65,10 @@ class PixivBot(object):
         exit()
 
     @staticmethod
-    def log_json(json_file, filename_prefix='log'):
+    def log_json(json_str, filename_prefix='log'):
         filename = filename_prefix + '_' + time.strftime("%m_%d %H_%M_%S", time.gmtime()) + '.json'
         with io.open(filename, 'w', encoding='utf-8') as f:
-            json.dump(json_file, f, ensure_ascii=False, indent=4)
-            f.close()
+            f.write(json_str)
 
     @staticmethod
     def json_to_object(json_text):
@@ -76,47 +76,23 @@ class PixivBot(object):
 
     # subroutines
 
-    def save_token(self):
-        with open('rtoken', 'w') as f:
-            f.write(self.refresh_token)
-            f.close()
-        with open('atoken', 'w') as f:
-            f.write(self.access_token)
-            f.close()
-
-    def attempt_recover_token(self):
+    def recover_token(self):
         try:
-            f = open('rtoken', 'r')
-        except FileNotFoundError:
-            return False
-        rtoken = f.read()
-        f.close()
-        self.auth_payload['refresh_token'] = rtoken
-        self.auth_payload['grant_type'] = 'refresh_token'
-        r = self.session.post(self.auth_url, headers=self.auth_header, data=self.auth_payload)
-        if r.status_code != 200:
-            del self.auth_payload['refresh_token']
-            del self.auth_payload['grant_type']
-            print(r.text)
-            return False
-        else:
-            r = r.json()
-            self.access_token = r['response']['access_token']
-            self.refresh_token = r['response']['refresh_token']
-            self.save_token()
-            return True
+            with open('atoken', 'r') as f:
+                self.access_token = f.read()
+        except:
+            pass
+
+    def save_token(self):
+        try:
+            with open('atoken', 'w') as f:
+                f.write(self.access_token)
+        except:
+            pass
 
     def get_access_token(self):
-        if self.attempt_recover_token():
-            return
-        if self.refresh_token is None:
-            self.auth_payload['username'] = self.username
-            self.auth_payload['password'] = self.password
-            self.auth_payload['grant_type'] = 'password'
-            print('!!!used username and password for login!!!')
-        else:
-            self.auth_payload['refresh_token'] = self.refresh_token
-            self.auth_payload['grant_type'] = 'refresh_token'
+        self.auth_payload['username'] = self.username
+        self.auth_payload['password'] = self.password
         # get access token
         auth_response = self.session.post(self.auth_url, headers=self.auth_header, data=self.auth_payload)
         if auth_response.status_code != 200:
@@ -127,21 +103,43 @@ class PixivBot(object):
         self.is_premium = auth_response['response']['user']['is_premium']
         # save token to file
         self.save_token()
-        print(self.access_token)
+        print('New Token:', self.access_token)
 
-    def get_saved_access_token(self):
-        with open('atoken', 'r') as f:
-            self.access_token = f.read()
-            f.close()
+    def auth(self):
+        self.recover_token()
+        if not self.test_access_token():
+            self.get_access_token()
 
-    def search(self, pages=100):
-        # if self.is_premium:
-        #     self.search_params['sort'] = 'popular'
+    def test_access_token(self):
+        trial_url = 'https://app-api.pixiv.net/v1/illust/recommended?content_type=illust \
+        &filter=for_ios&include_ranking_label=true'
+        if not self.access_token:
+            return False
+        print('Token recovered:', self.access_token)
         self.header['Authorization'] = 'Bearer %s' % self.access_token
+        r = self.session.get(trial_url, headers=self.header)
+        del self.header['Authorization']
+        if r.status_code == 200:
+            print('Successfully recovered access token')
+            return True
+        else:
+            print('Recovered token no-good... using username and pass')
+            return False
+
+    def search(self, pages=100, log=False):
+        if self.is_premium:
+            self.search_params['sort'] = 'popular'
+        self.header['Authorization'] = 'Bearer %s' % self.access_token
+        print('Token used:', self.access_token)
         for page in range(1, pages):  # grab at most 5000
             self.search_params['page'] = page
             r = self.session.get(self.search_url, headers=self.header, params=self.search_params)
+            if r.status_code != 200:
+                self.fatal('Search Error: %s' % r.text)
             r.encoding = 'utf-8'
+            if log:
+                self.log_json(r.text)
+                print('Got %d results' % r.json()['pagination']['total'])
             self.j = self.json_to_object(r.text)
             self.strip_urls()
             if self.j.pagination.next == 'null':
@@ -168,6 +166,9 @@ class PixivBot(object):
                 f.close()
 
     def save_images(self, debug=False):
+        # todo
+        # separate image in folders based on ranking
+        # or just buy a fucking premium.
         for u in self.image_url_list:
             try:
                 filename = os.path.basename(u)
@@ -179,32 +180,31 @@ class PixivBot(object):
                 print(e)
         self.image_url_list = []
 
-    def save_mangas(self, debug=False):
+    def save_mangas(self):
         if not os.path.exists('manga'):
             os.makedirs('manga')
-        for id in self.manga_id_list:
-            r = self.session.get(self.illust_info_url % id, headers=self.header)
+        for _id in self.manga_id_list:
+            r = self.session.get(self.illust_info_url % _id, headers=self.header)
             if r.status_code != 200:
                 self.fatal('Error in getting detailed info on img\n%s' % r.text)
             j = self.json_to_object(r.text)
             for img in j.response[0].metadata.pages:
-                filename = os.path.join(os.path.dirname(__file__), 'manga',os.path.basename(img.image_urls.medium))
+                filename = os.path.join(os.path.dirname(__file__), 'manga', os.path.basename(img.image_urls.medium))
                 self.save_image_from_url(img.image_urls.medium, filename)
         self.manga_id_list = []
 
     def test_run(self):
-        self.search_debug()
-        self.strip_urls(debug=True)
-        self.save_images(debug=True)
-        self.save_mangas(debug=True)
-
-    def run(self, pages=100):
+        self.test_access_token()
         self.get_access_token()
-        self.search(pages=pages)
-        self.strip_urls()
-        self.save_images()
-        self.save_mangas()
+        self.test_access_token()
+
+    def run(self, pages=100, log_search=False, save=True):
+        self.auth()
+        self.search(pages=pages, log=log_search)
+        if save:
+            self.save_images()
+            self.save_mangas()
 
 if __name__ == '__main__':
     p = PixivBot(username='yu_mingqian@sina.com', password='password')
-    p.run(pages=2)
+    p.run(pages=10, log_search=False, save=True)
