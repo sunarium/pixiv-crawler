@@ -5,6 +5,7 @@ import os
 import time
 import json
 import io
+import random
 from collections import namedtuple
 
 
@@ -166,34 +167,30 @@ class PixivBot(object):
                 f.write(stream.content)
 
     def save_images(self, debug=False):
-        # todo
-        # - Added a counter
-        # - Add random delay
         total = len(self.image_url_list)
         for i, u in enumerate(self.image_url_list):
             try:
-                print('Saving {:4d} of {:4d}...'.format(i, total), end='\n')
+                print('Saving illustration {:4d} of {:4d}...'.format(i, total), end='\r')
                 self.save_image_from_url(u)
                 if debug:
                     print('Successfully saved %s' % u)
-                time.sleep(2)
+                time.sleep(random.randint(1, 4))
             except Exception as e:
                 print('Error in saving %s' % u)
                 print(e)
         self.image_url_list = []
 
     def save_mangas(self):
-        if not os.path.exists('manga'):
-            os.makedirs('manga')
-        for _id in self.manga_id_list:
+        total = len(self.manga_id_list)
+        for i, _id in enumerate(self.manga_id_list):
+            print('Saving manga {:4d} of {:4d}...'.format(i, total), end='\r')
             r = self.session.get(self.illust_info_url % _id, headers=self.header)
             if r.status_code != 200:
                 self.fatal('Error in getting detailed info on img\n%s' % r.text)
             j = self.json_to_object(r.text)
             for img in j.response[0].metadata.pages:
-                filename = os.path.join(os.path.dirname(__file__), 'manga', os.path.basename(img.image_urls.medium))
-                self.save_image_from_url(img.image_urls.medium)
-            time.sleep(2)
+                    self.save_image_from_url(img.image_urls.medium)
+            time.sleep(random.randint(1, 4))
         self.manga_id_list = []
 
     def test_run(self):
@@ -210,4 +207,4 @@ class PixivBot(object):
 
 if __name__ == '__main__':
     p = PixivBot(username='yu_mingqian@sina.com', password='password')
-    p.run(pages=1, log_search=True, save=True)
+    p.run(pages=1, log_search=False, save=True)
