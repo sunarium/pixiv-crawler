@@ -1,3 +1,4 @@
+#!usr/bin/env python
 # -*- coding:utf-8 -*-
 
 import requests
@@ -6,8 +7,11 @@ import time
 import json
 import io
 import random
+import threading
 from collections import namedtuple
 
+USERNAME = 'Your user name here'
+PASSWORD = 'Your password'
 
 class PixivBot(object):
     # constants
@@ -28,7 +32,7 @@ class PixivBot(object):
     search_url = 'https://public-api.secure.pixiv.net/v1/search/works.json'
     search_params = {
         'q': 'めぐみん',
-        'page': 1,  # subject to change
+        'page': 1, 
         'per_page': 30,  # DO NOT CHANGE
         'period': 'all',
         'order': 'desc',
@@ -37,7 +41,7 @@ class PixivBot(object):
         'types': 'illustration,manga',
         'image_sizes': 'large',
         'include_stats': True,
-        'include_sanity_level': True
+        'include_sanity_level': True,
     }
     header = {
         'Referer': 'http://spapi.pixiv.net/',
@@ -58,6 +62,7 @@ class PixivBot(object):
         self.j = None
         self.image_url_list = []
         self.manga_id_list = []
+        self.auth()
 
     # helpers
     @staticmethod
@@ -127,12 +132,13 @@ class PixivBot(object):
             print('Recovered token no-good... using username and pass')
             return False
 
-    def search(self, pages=100, log=False):
-        if self.is_premium:
-            self.search_params['sort'] = 'popular'
+    def search(self, start_page=1, end_page=100, log=False):
+        # if self.is_premium:
+        #     self.search_params['sort'] = 'popular'
+
         self.header['Authorization'] = 'Bearer %s' % self.access_token
         print('Token used:', self.access_token)
-        for page in range(1, pages+1):  # grab at most 5000
+        for page in range(start_page, end_page+1):
             self.search_params['page'] = page
             r = self.session.get(self.search_url, headers=self.header, params=self.search_params)
             if r.status_code != 200:
@@ -140,7 +146,6 @@ class PixivBot(object):
             r.encoding = 'utf-8'
             if log:
                 self.log_json(r.text)
-                print('Got %d results' % r.json()['pagination']['total'])
             self.j = self.json_to_object(r.text)
             self.strip_urls()
             if self.j.pagination.next == 'null':
@@ -159,12 +164,13 @@ class PixivBot(object):
             print(self.manga_id_list)
             print(self.image_url_list)
 
-    def save_image_from_url(self, url):
+    def save_image_from_url(self, url, folder=''):
         file = os.path.basename(url)
-        if not os.path.exists(file):
-            with open(file, 'wb+') as f:
+        if not os.path.exists(os.path.join(folder, file)):
+            with open(os.path.join(folder, file), 'wb+') as f:
                 stream = self.session.get(url, headers=self.download_header, stream=True)
                 f.write(stream.content)
+            time.sleep(random.randint(1, 4))
 
     def save_images(self, debug=False):
         total = len(self.image_url_list)
@@ -174,11 +180,11 @@ class PixivBot(object):
                 self.save_image_from_url(u)
                 if debug:
                     print('Successfully saved %s' % u)
-                time.sleep(random.randint(1, 4))
+
             except Exception as e:
                 print('Error in saving %s' % u)
                 print(e)
-        self.image_url_list = []
+        print('')
 
     def save_mangas(self):
         total = len(self.manga_id_list)
@@ -186,25 +192,75 @@ class PixivBot(object):
             print('Saving manga {:4d} of {:4d}...'.format(i, total), end='\r')
             r = self.session.get(self.illust_info_url % _id, headers=self.header)
             if r.status_code != 200:
-                self.fatal('Error in getting detailed info on img\n%s' % r.text)
+                print('Error in getting detailed info on img\n%s' % r.text)
             j = self.json_to_object(r.text)
             for img in j.response[0].metadata.pages:
                     self.save_image_from_url(img.image_urls.medium)
-            time.sleep(random.randint(1, 4))
+        print('')
+
+    def clear(self):
+        self.image_url_list = []
         self.manga_id_list = []
+
+    def save_urls(self, suffix=''):
+        with open('img_result' + suffix + '.json', 'w') as f:
+            f.write(json.dumps(self.image_url_list))
+        with open('manga_result' + suffix + '.json', 'w') as f:
+            f.write(json.dumps(self.manga_id_list))
+
+    def recover_urls(self, suffix=''):
+        with open('img_result' + suffix + '.json', 'r') as f:
+            self.image_url_list = json.loads(f.read())
+        with open('manga_result' + suffix + '.json', 'r') as f:
+            self.manga_id_list = json.loads(f.read())
 
     def test_run(self):
         self.test_access_token()
         self.get_access_token()
         self.test_access_token()
 
-    def run(self, pages=100, log_search=False, save=True):
-        self.auth()
-        self.search(pages=pages, log=log_search)
+    def run(self, start_page=1, end_pages=100, log_search=False, save=True):
+        self.search(start_page=start_page, end_page=end_pages, log=log_search)
+
         if save:
             self.save_images()
             self.save_mangas()
 
+    def run_full(self, start=1, end=100):
+        self.auth()
+        for i in range(start, end + 2, 10):
+            self.run(start_page=i, end_pages=i+9)
+            self.save_urls('_{:02d}_{:02d}'.format(i, i+9))
+            self.clear()
+            print(i + 9, 'pages processed.')
+            time.sleep(10)
+
+    # used to generate ranking data, dont use        
+    def sch(self):
+        self.header['Authorization'] = 'Bearer %s' % self.access_token
+        print('Token used:', self.access_token)
+        for page in range(1, 101):
+            self.search_params['page'] = page
+            r = self.session.get(self.search_url, headers=self.header, params=self.search_params)
+            if r.status_code != 200:
+                self.fatal('Search Error: %s' % r.text)
+            r.encoding = 'utf-8'
+            self.j = self.json_to_object(r.text)
+            self.gen(page // 10)
+            if self.j.pagination.next == 'null':
+                break
+            time.sleep(4)
+            print('%2d pages processed' % page, end='\r')
+
+    def gen(self, index):
+        f = open(str(index), 'a')
+        for res in self.j.response:
+            f.write(str(res.id) + '\n')
+        f.close()
+
+
 if __name__ == '__main__':
-    p = PixivBot(username='yu_mingqian@sina.com', password='password')
-    p.run(pages=1, log_search=False, save=True)
+    p = PixivBot(username=USERNAME, password=PASSWORD)
+    # p.run(start_page=1, end_pages=60, log_search=True, save=False)
+    p.run_full(start=1)
+    # p.sch()
