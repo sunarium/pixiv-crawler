@@ -1,17 +1,17 @@
-#!usr/bin/env python
+#!usr/bin/env python3
 # -*- coding:utf-8 -*-
 
 import requests
+
+import sys
 import os
 import time
 import json
 import io
 import random
-import threading
+import getpass
+import traceback
 from collections import namedtuple
-
-USERNAME = 'Your user name here'
-PASSWORD = 'Your password'
 
 class PixivBot(object):
     # constants
@@ -23,16 +23,15 @@ class PixivBot(object):
         'App-Version': '6.7.1',
         'User-Agent': 'PixivIOSApp/6.7.1 (iOS 10.3.1; iPhone8,1)',
     }
-    auth_payload = {
+    initial_auth_payload = { # see comments in __init__
         'get_secure_url': 1,
         'client_id': 'bYGKuGVw91e0NMfPGp44euvGt59s',
         'client_secret': 'HP3RmkgAmEGro0gn1x9ioawQE8WMfvLXDz3ZqxpK',
         'grant_type': 'password'
     }
     search_url = 'https://public-api.secure.pixiv.net/v1/search/works.json'
-    search_params = {
-        'q': 'めぐみん',
-        'page': 1, 
+    initial_search_params = { # see comments in __init__
+        'page': 1,
         'per_page': 30,  # DO NOT CHANGE
         'period': 'all',
         'order': 'desc',
@@ -43,7 +42,7 @@ class PixivBot(object):
         'include_stats': True,
         'include_sanity_level': True,
     }
-    header = {
+    initial_header = { # see comments in __init__
         'Referer': 'http://spapi.pixiv.net/',
         'User-Agent': 'PixivIOSApp/5.8.7',
     }
@@ -51,10 +50,19 @@ class PixivBot(object):
         'Referer': 'https://app-api.pixiv.net/'
     }
     illust_info_url = 'https://public-api.secure.pixiv.net/v1/works/%s.json'
+    token_file = 'atoken'
 
-    def __init__(self, username, password):
+    def __init__(self, username, password, tag='めぐみん'):
         self.username = username
         self.password = password
+        # dicts are mutable and class attributes are added to
+        #  instances by reference (not copied) upon instance creation.
+        # changing e.g. initial_search_params will affect all instances.
+        # therefore search_params has to be created at init time.
+        self.search_params = self.initial_search_params.copy()
+        self.auth_payload = self.initial_auth_payload.copy()
+        self.header = self.initial_header.copy()
+        self.search_params["q"] = tag
         self.is_premium = False
         self.access_token = None
         self.refresh_token = None
@@ -68,7 +76,7 @@ class PixivBot(object):
     @staticmethod
     def fatal(message):
         print('[FATAL]', message)
-        exit()
+        sys.exit(1)
 
     @staticmethod
     def log_json(json_str, filename_prefix='log'):
@@ -78,29 +86,52 @@ class PixivBot(object):
 
     @staticmethod
     def json_to_object(json_text):
-        return json.loads(json_text, object_hook=lambda d: namedtuple('json', d.keys())(*d.values()))
+        objhook = lambda d: namedtuple('json', d.keys())(*d.values())
+        return json.loads(json_text, object_hook=objhook)
 
     # subroutines
 
     def recover_token(self):
         try:
-            with open('atoken', 'r') as f:
-                self.access_token = f.read()
-        except:
+            with open(self.token_file, 'r') as f:
+                dat = f.read()
+            if (not self.username) and (dat[0] != "{"):
+                self.access_token = dat
+            else:
+                dat = json.loads(dat)
+                if (not self.username) or (dat["user"] == self.username):
+                    self.access_token = dat["token"]
+        except (EnvironmentError, json.decoder.JSONDecodeError):
             pass
+        except:
+            traceback.print_exc()
 
     def save_token(self):
         try:
-            with open('atoken', 'w') as f:
-                f.write(self.access_token)
-        except:
+            dat = json.dumps({"user": self.username, "token": self.access_token})
+            with open(self.token_file, 'w') as f:
+                f.write(dat)
+        except EnvironmentError:
             pass
+        except:
+            traceback.print_exc()
+
+    def save_token_old(self):
+        try:
+            dat = json.dumps({"user": self.username, "token": self.access_token})
+            with open(self.token_file, 'w') as f:
+                f.write(self.access_token)
+        except EnvironmentError:
+            pass
+        except:
+            traceback.print_exc()
 
     def get_access_token(self):
         self.auth_payload['username'] = self.username
         self.auth_payload['password'] = self.password
         # get access token
-        auth_response = self.session.post(self.auth_url, headers=self.auth_header, data=self.auth_payload)
+        auth_response = self.session.post(self.auth_url, headers=self.auth_header,
+                                          data=self.auth_payload)
         if auth_response.status_code != 200:
             self.fatal('auth failed!\n%s' % auth_response.text)
         auth_response = auth_response.json()
@@ -117,8 +148,8 @@ class PixivBot(object):
             self.get_access_token()
 
     def test_access_token(self):
-        trial_url = 'https://app-api.pixiv.net/v1/illust/recommended?content_type=illust \
-        &filter=for_ios&include_ranking_label=true'
+        trial_url = ('https://app-api.pixiv.net/v1/illust/recommended?content_type=illust' +
+                    '&filter=for_ios&include_ranking_label=true')
         if not self.access_token:
             return False
         print('Token recovered:', self.access_token)
@@ -129,7 +160,7 @@ class PixivBot(object):
             print('Successfully recovered access token')
             return True
         else:
-            print('Recovered token no-good... using username and pass')
+            print('Recovered token invalid... using username and password')
             return False
 
     def search(self, start_page=1, end_page=100, log=False):
@@ -195,7 +226,7 @@ class PixivBot(object):
                 print('Error in getting detailed info on img\n%s' % r.text)
             j = self.json_to_object(r.text)
             for img in j.response[0].metadata.pages:
-                    self.save_image_from_url(img.image_urls.medium)
+                self.save_image_from_url(img.image_urls.medium)
         print('')
 
     def clear(self):
@@ -235,7 +266,7 @@ class PixivBot(object):
             print(i + 9, 'pages processed.')
             time.sleep(10)
 
-    # used to generate ranking data, dont use        
+    # used to generate ranking data, don't use
     def sch(self):
         self.header['Authorization'] = 'Bearer %s' % self.access_token
         print('Token used:', self.access_token)
@@ -260,7 +291,14 @@ class PixivBot(object):
 
 
 if __name__ == '__main__':
-    p = PixivBot(username=USERNAME, password=PASSWORD)
+    if os.path.exists(PixivBot.token_file):
+        bft = " (leave blank to use exisiting token)"
+    else:
+        bft = ""
+    username = input("Login (e.g. email){}: ".format(bft))
+    password = getpass.getpass("Password{}: ".format(bft))
+    tag = input("Tag (default 'めぐみん'): ").strip() or 'めぐみん'
+    p = PixivBot(username=username, password=password, tag=tag)
     # p.run(start_page=1, end_pages=60, log_search=True, save=False)
     p.run_full(start=1)
     # p.sch()
